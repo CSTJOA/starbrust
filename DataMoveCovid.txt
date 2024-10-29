@@ -1,0 +1,142 @@
+-- Truncate table for demo
+delete from iceberg.bronze.covid_19;
+select * from iceberg.bronze.covid_19;
+
+delete from iceberg.silver.covid_19;
+select * from iceberg.silver.covid_19;
+
+
+-- From source data to Bronze
+insert into iceberg.bronze.covid_19
+(select * from "postgres-ext".data.covid_19);
+
+
+-- From Bronze to Silver, CDC
+drop table if exists iceberg.silver.temp_covid_19 ;
+create table if not exists iceberg.silver.temp_covid_19 (
+	date_reported varchar,
+	country_code varchar,
+	country varchar,
+	who_region varchar,
+	new_cases varchar,
+	cumulative_cases varchar,
+	new_deaths varchar,
+	cumulative_deaths varchar,
+	Eff_dt_from date,
+	Eff_dt_to date,
+	Flag varchar
+);
+
+insert into iceberg.silver.temp_covid_19
+select * from 
+(
+	Select hist.date_reported,
+	hist.country_code,
+	hist.country,
+	hist.who_region,
+	hist.new_cases,
+	hist.cumulative_cases,
+	hist.new_deaths,
+	hist.cumulative_deaths,
+	Eff_dt_from,
+	CURRENT_DATE as Eff_dt_to,
+	'Update' as Flag
+	from iceberg.silver.covid_19 hist
+	left outer join iceberg.bronze.covid_19 existing
+		on  existing.date_reported = hist.date_reported
+		and existing.country = hist.country
+    and hist.Eff_dt_to = date('9999-12-31')
+	where existing.date_reported is null
+
+	union all
+	
+	select existing.date_reported,
+	existing.country_code,
+	existing.country,
+	existing.who_region,
+	existing.new_cases,
+	existing.cumulative_cases,
+	existing.new_deaths,
+	existing.cumulative_deaths,
+	hist_2.Eff_dt_from,
+	CURRENT_DATE as Eff_dt_to,
+	'Update'  as Flag
+	from iceberg.bronze.covid_19 existing
+	left outer join iceberg.silver.covid_19 hist
+		on  existing.date_reported = hist.date_reported
+		and	existing.country_code = hist.country_code
+		and	existing.country = hist.country
+		and	existing.who_region = hist.who_region
+		and	existing.new_cases = hist.new_cases
+		and	existing.cumulative_cases = hist.cumulative_cases
+		and	existing.new_deaths = hist.new_deaths
+		and	existing.cumulative_deaths = hist.cumulative_deaths
+		and hist.Eff_dt_to = date('9999-12-31') 
+	left outer join iceberg.silver.covid_19 hist_2
+		on existing.date_reported = hist_2.date_reported
+		and existing.country = hist_2.country
+		and hist_2.Eff_dt_to = date('9999-12-31') 
+	where hist.date_reported is null and hist_2.date_reported is not null
+)
+union all 
+(
+    select existing.*,
+	date('1900-01-01') as Eff_dt_from,
+	date('9999-12-31') as Eff_dt_to,
+	'Insert'  as Flag
+	from iceberg.bronze.covid_19 existing
+    left outer join iceberg.silver.covid_19 hist
+		on existing.date_reported = hist.date_reported
+		and existing.country = hist.country
+		and hist.Eff_dt_to=date('9999-12-31')
+    where hist.date_reported is null
+)
+union all
+(
+	select existing.*
+	,CURRENT_DATE as Eff_dt_from
+	,date('9999-12-31') as Eff_dt_to
+	,'Insert'  as Flag
+	from iceberg.bronze.covid_19 existing
+	left outer join iceberg.silver.covid_19 hist
+		on  existing.date_reported = hist.date_reported
+		and	existing.country_code = hist.country_code
+		and	existing.country = hist.country
+		and	existing.who_region = hist.who_region
+		and	existing.new_cases = hist.new_cases
+		and	existing.cumulative_cases = hist.cumulative_cases
+		and	existing.new_deaths = hist.new_deaths
+		and	existing.cumulative_deaths = hist.cumulative_deaths
+		and hist.Eff_dt_to = date('9999-12-31') 
+	left outer join iceberg.silver.covid_19 hist_2
+		on existing.date_reported = hist_2.date_reported
+		and existing.country = hist_2.country
+		and hist_2.Eff_dt_to = date('9999-12-31') 
+	where hist.date_reported is null and hist_2.date_reported is not null
+	
+);
+
+update iceberg.silver.covid_19
+set eff_dt_to = CURRENT_DATE 
+where exists (select 1 from iceberg.silver.temp_covid_19 temp
+where temp.date_reported = iceberg.silver.covid_19.date_reported
+and temp.country = covid_19.country
+and flag = 'Update');
+
+insert into iceberg.silver.covid_19
+(
+    Select temp.date_reported,
+	temp.country_code,
+	temp.country,
+	temp.who_region,
+	temp.new_cases,
+	temp.cumulative_cases,
+	temp.new_deaths,
+	temp.cumulative_deaths,
+	temp.eff_dt_from,
+	temp.eff_dt_to
+    from iceberg.silver.temp_covid_19 temp
+    where flag='Insert'
+);
+
+Select * from  iceberg.silver.covid_19;

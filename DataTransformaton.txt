@@ -1,0 +1,22 @@
+-- Data transformation to gold
+drop table if exists iceberg.gold.country_stat;
+create table iceberg.gold.country_stat as
+select covid.country
+, max(covid.cumulative_cases) as case_total_covid
+, max(cholera.case_total) as case_total_cholera
+from iceberg.silver.covid_19 as covid
+left outer join iceberg.silver.live_cholera as cholera
+  on upper(covid.country) = upper(cholera.adm0_name)
+  and cholera.Eff_dt_to = date('9999-12-31') 
+where covid.Eff_dt_to = date('9999-12-31') 
+group by covid.country;
+
+select * from iceberg.gold.country_stat;
+
+
+
+drop table if exists iceberg.gold.country_location;
+create table iceberg.gold.country_location as 
+select * from hive.ext_data.country_location;
+
+select * from iceberg.gold.country_location

@@ -1,0 +1,131 @@
+-- Truncate table for demo
+delete from iceberg.bronze.live_cholera;
+select * from iceberg.bronze.live_cholera;
+
+delete from iceberg.silver.live_cholera;
+select * from iceberg.silver.live_cholera;
+
+
+-- From source data to Bronze
+insert into iceberg.bronze.live_cholera 
+(select * from "mysql-ext".data.live_cholera);
+
+
+-- From Bronze to Silver, CDC
+drop table if exists iceberg.silver.temp_live_cholera ;
+create table if not exists iceberg.silver.temp_live_cholera (
+	adm0_name varchar,
+    who_region varchar,
+    iso_3_code varchar,
+    first_epiwk varchar,
+    last_epiwk varchar,
+    case_total varchar,
+    death_total varchar,
+	Eff_dt_from date,
+	Eff_dt_to date,
+	Flag varchar
+);
+
+insert into iceberg.silver.temp_live_cholera
+select * from 
+(
+	Select hist.adm0_name ,
+    hist.who_region ,
+    hist.iso_3_code ,
+    hist.first_epiwk ,
+    hist.last_epiwk ,
+    hist.case_total ,
+    hist.death_total ,
+	Eff_dt_from,
+	CURRENT_DATE as Eff_dt_to,
+	'Update' as Flag
+	from iceberg.silver.live_cholera hist
+	left outer join iceberg.bronze.live_cholera existing
+		on  existing.adm0_name = hist.adm0_name
+    and hist.Eff_dt_to = date('9999-12-31')
+	where existing.adm0_name is null
+
+	union all
+	
+	select existing.adm0_name ,
+    existing.who_region ,
+    existing.iso_3_code ,
+    existing.first_epiwk ,
+    existing.last_epiwk ,
+    existing.case_total ,
+    existing.death_total ,
+	hist_2.Eff_dt_from,
+	CURRENT_DATE as Eff_dt_to,
+	'Update'  as Flag
+	from iceberg.bronze.live_cholera existing
+	left outer join iceberg.silver.live_cholera hist
+		on  existing.adm0_name = hist.adm0_name
+		and	existing.who_region = hist.who_region
+		and	existing.iso_3_code = hist.iso_3_code
+		and	existing.first_epiwk = hist.first_epiwk
+		and	existing.last_epiwk = hist.last_epiwk
+		and	existing.case_total = hist.case_total
+		and	existing.death_total = hist.death_total
+		and hist.Eff_dt_to = date('9999-12-31') 
+	left outer join iceberg.silver.live_cholera hist_2
+		on existing.adm0_name = hist_2.adm0_name
+		and hist_2.Eff_dt_to = date('9999-12-31') 
+	where hist.adm0_name is null and hist_2.adm0_name is not null
+)
+union all 
+(
+    select existing.*,
+	date('1900-01-01') as Eff_dt_from,
+	date('9999-12-31') as Eff_dt_to,
+	'Insert'  as Flag
+	from iceberg.bronze.live_cholera existing
+    left outer join iceberg.silver.live_cholera hist
+		on existing.adm0_name = hist.adm0_name
+		and hist.Eff_dt_to=date('9999-12-31')
+    where hist.adm0_name is null
+)
+union all
+(
+	select existing.*
+	,CURRENT_DATE as Eff_dt_from
+	,date('9999-12-31') as Eff_dt_to
+	,'Insert'  as Flag
+	from iceberg.bronze.live_cholera existing
+	left outer join iceberg.silver.live_cholera hist
+		on  existing.adm0_name = hist.adm0_name
+		and	existing.who_region = hist.who_region
+		and	existing.iso_3_code = hist.iso_3_code
+		and	existing.first_epiwk = hist.first_epiwk
+		and	existing.last_epiwk = hist.last_epiwk
+		and	existing.case_total = hist.case_total
+		and	existing.death_total = hist.death_total
+		and hist.Eff_dt_to = date('9999-12-31') 
+	left outer join iceberg.silver.live_cholera hist_2
+		on existing.adm0_name = hist_2.adm0_name
+		and hist_2.Eff_dt_to = date('9999-12-31') 
+	where hist.adm0_name is null and hist_2.adm0_name is not null
+	
+);
+
+update iceberg.silver.live_cholera
+set eff_dt_to = CURRENT_DATE 
+where exists (select 1 from iceberg.silver.temp_live_cholera temp
+where temp.adm0_name = iceberg.silver.live_cholera.adm0_name
+and flag = 'Update');
+
+insert into iceberg.silver.live_cholera
+(
+    Select temp.adm0_name ,
+    temp.who_region ,
+    temp.iso_3_code ,
+    temp.first_epiwk ,
+    temp.last_epiwk ,
+    temp.case_total ,
+    temp.death_total ,
+	temp.eff_dt_from,
+	temp.eff_dt_to
+    from iceberg.silver.temp_live_cholera temp
+    where flag='Insert'
+);
+
+Select * from  iceberg.silver.live_cholera;
